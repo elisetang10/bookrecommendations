@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, Book, Sparkles, ExternalLink } from 'lucide-react';
+import OpenAIService from '../services/openaiService';
 
 const BookRecommendationBot = () => {
   const [messages, setMessages] = useState([]);
@@ -14,7 +15,10 @@ const BookRecommendationBot = () => {
     bookLoggingApp: ''
   });
   const [isTyping, setIsTyping] = useState(false);
+  const [recommendedBooks, setRecommendedBooks] = useState([]);
+  const [setupComplete, setSetupComplete] = useState(false);
   const messagesEndRef = useRef(null);
+  const openAIService = useRef(new OpenAIService());
 
   const questions = [
     {
@@ -26,11 +30,11 @@ const BookRecommendationBot = () => {
       id: 'genres',
       text: "Nice to meet you, {name}! 📚 What are your favorite genres? You can select multiple:",
       type: 'multiple',
-      options: ['Fiction', 'Non-Fiction', 'Mystery/Thriller', 'Romance', 'Sci-Fi', 'Fantasy', 'Biography', 'Self-Help', 'History', 'Poetry']
+      options: ['Fiction', 'Non-Fiction', 'Mystery/Thriller', 'Romance', 'Sci-Fi', 'Fantasy', 'Biography', 'Self-Help', 'History', 'Poetry', 'Horror', 'Adventure', 'Young Adult', 'Classics']
     },
     {
       id: 'recentBooks',
-      text: "Great choices! 🎯 What are some books you've read recently? (Just list the titles)",
+      text: "Great choices! 🎯 What are some books you've read recently? (Just list the titles, separated by commas)",
       type: 'text'
     },
     {
@@ -47,33 +51,6 @@ const BookRecommendationBot = () => {
       id: 'bookLoggingApp',
       text: "Last question! Do you use any book tracking apps like Goodreads, Fable, or StoryGraph? 📱",
       type: 'text'
-    }
-  ];
-
-  const sampleBooks = [
-    {
-      title: "The Seven Husbands of Evelyn Hugo",
-      author: "Taylor Jenkins Reid",
-      genre: "Fiction",
-      summary: "A reclusive Hollywood icon finally tells her life story to a young journalist, revealing secrets about her seven marriages and rise to fame.",
-      amazonUrl: "https://amazon.com/dp/1501161938",
-      goodreadsUrl: "https://goodreads.com/book/show/32620332"
-    },
-    {
-      title: "Dune",
-      author: "Frank Herbert",
-      genre: "Sci-Fi",
-      summary: "On the desert planet Arrakis, young Paul Atreides becomes embroiled in a struggle for control of the universe's most valuable substance.",
-      amazonUrl: "https://amazon.com/dp/0441172717",
-      goodreadsUrl: "https://goodreads.com/book/show/44767458"
-    },
-    {
-      title: "The Thursday Murder Club",
-      author: "Richard Osman",
-      genre: "Mystery",
-      summary: "Four retirees in a peaceful retirement village meet weekly to investigate cold cases, until they find themselves in the middle of their first live case.",
-      amazonUrl: "https://amazon.com/dp/1984880241",
-      goodreadsUrl: "https://goodreads.com/book/show/46000520"
     }
   ];
 
@@ -102,50 +79,155 @@ const BookRecommendationBot = () => {
     setMessages(prev => [...prev, { text, sender: 'user', timestamp: new Date() }]);
   };
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim()) return;
 
     addUserMessage(input);
-    processUserInput(input);
+    
+    if (!setupComplete) {
+      await processSetupInput(input);
+    } else {
+      await handlePostSetupChat(input);
+    }
+    
     setInput('');
   };
 
-  const processUserInput = (input) => {
+  const processSetupInput = async (input) => {
     const currentQuestion = questions[currentStep];
+    const updatedProfile = { ...userProfile };
     
-    if (currentQuestion) {
-      // Update user profile
-      const updatedProfile = { ...userProfile };
-      
-      if (currentQuestion.id === 'name') {
-        updatedProfile.name = input;
-      } else if (currentQuestion.id === 'genres') {
-        updatedProfile.genres = input.split(',').map(g => g.trim());
-      } else if (currentQuestion.id === 'recentBooks') {
-        updatedProfile.recentBooks = input.split(',').map(b => b.trim());
-      } else if (currentQuestion.id === 'favoriteBooks') {
-        updatedProfile.favoriteBooks = input.split(',').map(b => b.trim());
-      } else if (currentQuestion.id === 'favoriteAuthors') {
-        updatedProfile.favoriteAuthors = input.split(',').map(a => a.trim());
-      } else if (currentQuestion.id === 'bookLoggingApp') {
-        updatedProfile.bookLoggingApp = input;
-      }
-      
-      setUserProfile(updatedProfile);
-      
-      // Move to next question or provide recommendations
-      if (currentStep < questions.length - 1) {
-        setCurrentStep(currentStep + 1);
-        const nextQuestion = questions[currentStep + 1];
-        const questionText = nextQuestion.text.replace('{name}', updatedProfile.name);
-        addBotMessage(questionText);
-      } else {
-        // Finished questions, provide recommendations
-        provideRecommendations(updatedProfile);
-      }
+    // Update user profile based on current step
+    if (currentQuestion.id === 'name') {
+      updatedProfile.name = input.trim();
+    } else if (currentQuestion.id === 'genres') {
+      updatedProfile.genres = input.split(',').map(g => g.trim()).filter(g => g);
+    } else if (currentQuestion.id === 'recentBooks') {
+      updatedProfile.recentBooks = input.split(',').map(b => b.trim()).filter(b => b);
+    } else if (currentQuestion.id === 'favoriteBooks') {
+      updatedProfile.favoriteBooks = input.split(',').map(b => b.trim()).filter(b => b);
+    } else if (currentQuestion.id === 'favoriteAuthors') {
+      updatedProfile.favoriteAuthors = input.split(',').map(a => a.trim()).filter(a => a);
+    } else if (currentQuestion.id === 'bookLoggingApp') {
+      updatedProfile.bookLoggingApp = input.trim();
+    }
+    
+    setUserProfile(updatedProfile);
+    
+    // Move to next question or provide recommendations
+    if (currentStep < questions.length - 1) {
+      setCurrentStep(currentStep + 1);
+      const nextQuestion = questions[currentStep + 1];
+      const questionText = nextQuestion.text.replace('{name}', updatedProfile.name);
+      addBotMessage(questionText);
     } else {
-      // Handle general chat after setup
-      handleGeneralChat(input);
+      // Finished questions, get AI recommendations
+      setSetupComplete(true);
+      await getAIRecommendations(updatedProfile);
+    }
+  };
+
+  const getAIRecommendations = async (profile) => {
+    setIsTyping(true);
+    
+    try {
+      const recommendations = await openAIService.current.getBookRecommendations(profile);
+      
+      setTimeout(() => {
+        setMessages(prev => [...prev, { 
+          text: recommendations, 
+          sender: 'bot', 
+          timestamp: new Date() 
+        }]);
+        setIsTyping(false);
+      }, 1500);
+
+      // Extract book titles from recommendations for later reference
+      extractBooksFromRecommendations(recommendations);
+      
+    } catch (error) {
+      console.error('Error getting recommendations:', error);
+      addBotMessage(`Sorry ${profile.name}, I'm having trouble getting recommendations right now. Let me try again in a moment! 😅`);
+    }
+  };
+
+  const extractBooksFromRecommendations = (recommendations) => {
+    // Simple regex to extract book titles (between ** markers)
+    const bookMatches = recommendations.match(/\*\*(.*?)\*\*/g);
+    if (bookMatches) {
+      const books = bookMatches.map(match => match.replace(/\*\*/g, ''));
+      setRecommendedBooks(books);
+    }
+  };
+
+  const handlePostSetupChat = async (input) => {
+    const lowerInput = input.toLowerCase();
+    
+    // Check if user is asking about a specific book
+    const mentionedBook = recommendedBooks.find(book => 
+      lowerInput.includes(book.toLowerCase())
+    );
+    
+    if (mentionedBook) {
+      await handleBookSpecificQuery(mentionedBook, input);
+    } else if (lowerInput.includes('more recommendations') || lowerInput.includes('different books')) {
+      await getAIRecommendations(userProfile);
+    } else {
+      await handleGeneralQuery(input);
+    }
+  };
+
+  const handleBookSpecificQuery = async (bookTitle, userInput) => {
+    const lowerInput = userInput.toLowerCase();
+    
+    if (lowerInput.includes('tell me more') || lowerInput.includes('learn more') || lowerInput.includes('summary')) {
+      setIsTyping(true);
+      
+      try {
+        // Extract author from the original recommendation or ask AI for summary
+        const summary = await openAIService.current.getBookSummary(bookTitle, 'the author');
+        
+        setTimeout(() => {
+          const response = `📚 **${bookTitle}**\n\n${summary}\n\nWould you like me to find links to purchase or add this to your reading list? 🔗`;
+          setMessages(prev => [...prev, { 
+            text: response, 
+            sender: 'bot', 
+            timestamp: new Date() 
+          }]);
+          setIsTyping(false);
+        }, 1000);
+        
+      } catch (error) {
+        addBotMessage(`Here's what I know about **${bookTitle}** - it's a fantastic read! 📚 Check it out on Goodreads or Amazon for detailed reviews. Would you like more books like this? 😊`);
+      }
+      
+    } else if (openAIService.current.isBookInterest(userInput)) {
+      const amazonUrl = `https://amazon.com/s?k=${encodeURIComponent(bookTitle)}`;
+      const goodreadsUrl = `https://goodreads.com/search?q=${encodeURIComponent(bookTitle)}`;
+      
+      addBotMessage(`Awesome choice, ${userProfile.name}! 🎉 **${bookTitle}** is a great pick!\n\nHere are some links:\n• [Amazon](${amazonUrl}) 🛒\n• [Goodreads](${goodreadsUrl}) 📖\n\nWould you like more recommendations similar to this one? 😊`);
+    } else {
+      addBotMessage(`📖 **${bookTitle}** is an excellent choice! Would you like me to tell you more about it, or are you looking for similar recommendations? 🤔`);
+    }
+  };
+
+  const handleGeneralQuery = async (input) => {
+    setIsTyping(true);
+    
+    try {
+      const response = await openAIService.current.handleGeneralQuestion(input, userProfile);
+      
+      setTimeout(() => {
+        setMessages(prev => [...prev, { 
+          text: response, 
+          sender: 'bot', 
+          timestamp: new Date() 
+        }]);
+        setIsTyping(false);
+      }, 1000);
+      
+    } catch (error) {
+      addBotMessage(`Thanks for chatting, ${userProfile.name}! 😊 Is there anything specific about books or reading recommendations I can help you with? 📚`);
     }
   };
 
@@ -160,34 +242,41 @@ const BookRecommendationBot = () => {
     addBotMessage(questions[currentStep + 1].text);
   };
 
-  const provideRecommendations = (profile) => {
-    setTimeout(() => {
-      const message = `Perfect, ${profile.name}! 🎉 Based on your preferences, here are some personalized recommendations:\n\n• **${sampleBooks[0].title}** by ${sampleBooks[0].author}\n  📖 Genre: ${sampleBooks[0].genre}\n\n• **${sampleBooks[1].title}** by ${sampleBooks[1].author}\n  📖 Genre: ${sampleBooks[1].genre}\n\n• **${sampleBooks[2].title}** by ${sampleBooks[2].author}\n  📖 Genre: ${sampleBooks[2].genre}\n\nWould you like to learn more about any of these books? Just type the book name! 😊`;
-      
-      addBotMessage(message);
-    }, 1500);
-  };
+  const formatMessageWithLinks = (text) => {
+    // Convert [text](url) format to clickable links
+    const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+    const parts = [];
+    let lastIndex = 0;
+    let match;
 
-  const handleGeneralChat = (input) => {
-    const lowerInput = input.toLowerCase();
-    
-    // Check if user is asking about a specific book
-    const mentionedBook = sampleBooks.find(book => 
-      lowerInput.includes(book.title.toLowerCase()) || 
-      lowerInput.includes(book.author.toLowerCase())
-    );
-    
-    if (mentionedBook) {
-      if (lowerInput.includes('tell me more') || lowerInput.includes('learn more') || lowerInput.includes('summary')) {
-        addBotMessage(`📚 **${mentionedBook.title}** by ${mentionedBook.author}\n\n${mentionedBook.summary}\n\nWould you like me to find links to purchase or add this to your reading list? 🔗`);
-      } else if (lowerInput.includes('like') || lowerInput.includes('love') || lowerInput.includes('interested')) {
-        addBotMessage(`Awesome! 🎉 I'm so glad you're interested in **${mentionedBook.title}**!\n\nHere are some links:\n• [Amazon](${mentionedBook.amazonUrl}) 🛒\n• [Goodreads](${mentionedBook.goodreadsUrl}) 📖\n\nWould you like more recommendations similar to this one? 😊`);
-      } else {
-        addBotMessage(`📖 **${mentionedBook.title}** by ${mentionedBook.author} - ${mentionedBook.genre}\n\nWould you like me to tell you more about this book or find similar recommendations? 🤔`);
+    while ((match = linkRegex.exec(text)) !== null) {
+      // Add text before the link
+      if (match.index > lastIndex) {
+        parts.push(text.substring(lastIndex, match.index));
       }
-    } else {
-      addBotMessage(`Thanks for chatting, ${userProfile.name}! 😊 Is there anything specific you'd like to know about the books I recommended, or would you like different suggestions? 📚`);
+      
+      // Add the link
+      parts.push(
+        <a 
+          key={match.index} 
+          href={match[2]} 
+          target="_blank" 
+          rel="noopener noreferrer"
+          className="text-blue-600 hover:text-blue-800 underline inline-flex items-center"
+        >
+          {match[1]} <ExternalLink className="w-3 h-3 ml-1" />
+        </a>
+      );
+      
+      lastIndex = match.index + match[0].length;
     }
+
+    // Add remaining text
+    if (lastIndex < text.length) {
+      parts.push(text.substring(lastIndex));
+    }
+
+    return parts.length > 1 ? parts : text;
   };
 
   return (
@@ -199,8 +288,10 @@ const BookRecommendationBot = () => {
             <Book className="w-6 h-6 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-semibold text-gray-800">BookBot</h1>
-            <p className="text-sm text-gray-500">Your Personal Reading Assistant</p>
+            <h1 className="text-xl font-semibold text-gray-800">BookBot AI</h1>
+            <p className="text-sm text-gray-500">
+              {setupComplete ? `Chatting with ${userProfile.name}` : 'Getting to know you...'}
+            </p>
           </div>
         </div>
       </div>
@@ -217,28 +308,23 @@ const BookRecommendationBot = () => {
               {message.sender === 'bot' && (
                 <div className="flex items-center space-x-2 mb-2">
                   <Sparkles className="w-4 h-4 text-purple-500" />
-                  <span className="text-xs font-medium text-purple-600">BookBot</span>
+                  <span className="text-xs font-medium text-purple-600">BookBot AI</span>
                 </div>
               )}
               <div className="whitespace-pre-line">
-                {message.text.split('\n').map((line, i) => {
-                  if (line.includes('[Amazon]') || line.includes('[Goodreads]')) {
-                    return (
-                      <div key={i} className="flex items-center space-x-1 text-blue-600 hover:text-blue-800">
-                        <ExternalLink className="w-3 h-3" />
-                        <span className="cursor-pointer underline">{line}</span>
-                      </div>
-                    );
-                  }
-                  return <div key={i}>{line}</div>;
-                })}
+                {message.text.split('\n').map((line, i) => (
+                  <div key={i}>
+                    {typeof formatMessageWithLinks(line) === 'object' ? 
+                      formatMessageWithLinks(line) : line}
+                  </div>
+                ))}
               </div>
             </div>
           </div>
         ))}
         
         {/* Genre selection for step 2 */}
-        {currentStep === 1 && questions[currentStep].type === 'multiple' && (
+        {currentStep === 1 && questions[currentStep].type === 'multiple' && !setupComplete && (
           <div className="flex justify-start">
             <div className="bg-white p-4 rounded-2xl shadow-md border border-gray-100 max-w-md">
               <div className="grid grid-cols-2 gap-2">
@@ -264,9 +350,9 @@ const BookRecommendationBot = () => {
               <button
                 onClick={() => handleGenreSelection(userProfile.genres)}
                 disabled={userProfile.genres.length === 0}
-                className="w-full mt-3 bg-gradient-to-r from-purple-500 to-blue-500 text-white py-2 px-4 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full mt-3 bg-gradient-to-r from-purple-500 to-blue-500 text-white py-2 px-4 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:from-purple-600 hover:to-blue-600 transition-colors"
               >
-                Continue with selected genres
+                Continue with selected genres ({userProfile.genres.length})
               </button>
             </div>
           </div>
@@ -294,21 +380,29 @@ const BookRecommendationBot = () => {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Type your message..."
+            placeholder={setupComplete ? "Ask about books or request new recommendations..." : "Type your answer..."}
             className="flex-1 px-4 py-3 border border-gray-300 rounded-full focus:outline-none focus:border-purple-400 focus:ring-2 focus:ring-purple-100"
+            disabled={isTyping}
           />
           <button
             onClick={handleSend}
-            disabled={!input.trim()}
+            disabled={!input.trim() || isTyping}
             className="bg-gradient-to-r from-purple-500 to-blue-500 text-white p-3 rounded-full hover:from-purple-600 hover:to-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <Send className="w-5 h-5" />
           </button>
         </div>
+        
+        {!setupComplete && (
+          <p className="text-xs text-gray-500 mt-2 text-center">
+            Step {currentStep + 1} of {questions.length}
+          </p>
+        )}
       </div>
     </div>
   );
 };
 
 export default BookRecommendationBot;
+
 
