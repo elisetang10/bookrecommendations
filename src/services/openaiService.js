@@ -149,3 +149,7 @@ class OpenAIService {
   }
 }
 
+// Export as default
+export default OpenAIService;
+
+
