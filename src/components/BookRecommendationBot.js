@@ -17,6 +17,7 @@ const BookRecommendationBot = () => {
   const [isTyping, setIsTyping] = useState(false);
   const [recommendedBooks, setRecommendedBooks] = useState([]);
   const [setupComplete, setSetupComplete] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
   const messagesEndRef = useRef(null);
   const openAIService = useRef(new OpenAIService());
 
@@ -145,6 +146,26 @@ const BookRecommendationBot = () => {
       // Extract book titles from recommendations for later reference
       extractBooksFromRecommendations(recommendations);
       
+      // Add quick action buttons after recommendations
+      setTimeout(() => {
+        setMessages(prev => [...prev, { 
+          text: "Quick actions:", 
+          sender: 'bot', 
+          timestamp: new Date(),
+          type: 'quick-actions'
+        }]);
+        
+        // Add help text only once
+        setTimeout(() => {
+          setMessages(prev => [...prev, { 
+            text: "help-guide", 
+            sender: 'bot', 
+            timestamp: new Date(),
+            type: 'help-text'
+          }]);
+        }, 500);
+      }, 2000);
+      
     } catch (error) {
       console.error('Error getting recommendations:', error);
       addBotMessage(`Sorry ${profile.name}, I'm having trouble getting recommendations right now. Let me try again in a moment! 😅`);
@@ -152,21 +173,55 @@ const BookRecommendationBot = () => {
   };
 
   const extractBooksFromRecommendations = (recommendations) => {
-    // Simple regex to extract book titles (between ** markers)
-    const bookMatches = recommendations.match(/\*\*(.*?)\*\*/g);
-    if (bookMatches) {
-      const books = bookMatches.map(match => match.replace(/\*\*/g, ''));
-      setRecommendedBooks(books);
+    // Multiple approaches to extract book titles
+    const books = [];
+    
+    // Method 1: Extract from **Title** format
+    const boldMatches = recommendations.match(/\*\*(.*?)\*\*/g);
+    if (boldMatches) {
+      books.push(...boldMatches.map(match => match.replace(/\*\*/g, '').trim()));
     }
+    
+    // Method 2: Extract from bullet points
+    const bulletMatches = recommendations.match(/•\s*(.+?)(?:by|📖)/gi);
+    if (bulletMatches) {
+      books.push(...bulletMatches.map(match => 
+        match.replace(/•\s*/, '').replace(/by.*$/i, '').replace(/📖.*$/i, '').trim()
+      ));
+    }
+    
+    // Method 3: Look for common book title patterns
+    const titleMatches = recommendations.match(/(?:recommend|suggest|try)\s+["']?([^"'\n]+)["']?\s+by/gi);
+    if (titleMatches) {
+      books.push(...titleMatches.map(match => 
+        match.replace(/(?:recommend|suggest|try)\s+["']?/i, '').replace(/["']?\s+by.*$/i, '').trim()
+      ));
+    }
+    
+    // Remove duplicates and empty strings
+    const uniqueBooks = [...new Set(books.filter(book => book && book.length > 0))];
+    
+    console.log('Extracted books:', uniqueBooks); // Debug log
+    setRecommendedBooks(uniqueBooks);
   };
 
   const handlePostSetupChat = async (input) => {
     const lowerInput = input.toLowerCase();
     
+    if (debugMode) {
+      console.log('User input:', input);
+      console.log('Recommended books:', recommendedBooks);
+      console.log('Setup complete:', setupComplete);
+    }
+    
     // Check if user is asking about a specific book
     const mentionedBook = recommendedBooks.find(book => 
       lowerInput.includes(book.toLowerCase())
     );
+    
+    if (debugMode) {
+      console.log('Mentioned book found:', mentionedBook);
+    }
     
     if (mentionedBook) {
       await handleBookSpecificQuery(mentionedBook, input);
@@ -180,15 +235,30 @@ const BookRecommendationBot = () => {
   const handleBookSpecificQuery = async (bookTitle, userInput) => {
     const lowerInput = userInput.toLowerCase();
     
-    if (lowerInput.includes('tell me more') || lowerInput.includes('learn more') || lowerInput.includes('summary')) {
+    // Check for link requests FIRST (most specific)
+    if (lowerInput.includes('link') || lowerInput.includes('buy') || lowerInput.includes('purchase') || 
+        lowerInput.includes('amazon') || lowerInput.includes('goodreads') || lowerInput.includes('where to get') ||
+        lowerInput.includes('find it') || lowerInput.includes('get this book')) {
+      
+      const amazonUrl = `https://amazon.com/s?k=${encodeURIComponent(bookTitle)}`;
+      const goodreadsUrl = `https://goodreads.com/search?q=${encodeURIComponent(bookTitle)}`;
+      
+      addBotMessage(`Perfect! Here are the links for **${bookTitle}**: 🔗\n\n• [Buy on Amazon](${amazonUrl}) 🛒\n• [View on Goodreads](${goodreadsUrl}) 📖\n\nNeed anything else, ${userProfile.name}? 😊`);
+      return; // Exit early to prevent other logic
+    }
+    
+    // Check for summary requests
+    if (lowerInput.includes('tell me more') || lowerInput.includes('learn more') || 
+        lowerInput.includes('summary') || lowerInput.includes('about this book') || 
+        lowerInput.includes('what is it about')) {
+      
       setIsTyping(true);
       
       try {
-        // Extract author from the original recommendation or ask AI for summary
         const summary = await openAIService.current.getBookSummary(bookTitle, 'the author');
         
         setTimeout(() => {
-          const response = `📚 **${bookTitle}**\n\n${summary}\n\nWould you like me to find links to purchase or add this to your reading list? 🔗`;
+          const response = `📚 **${bookTitle}**\n\n${summary}\n\nWould you like me to find links to purchase this book? 🔗`;
           setMessages(prev => [...prev, { 
             text: response, 
             sender: 'bot', 
@@ -198,20 +268,60 @@ const BookRecommendationBot = () => {
         }, 1000);
         
       } catch (error) {
-        addBotMessage(`Here's what I know about **${bookTitle}** - it's a fantastic read! 📚 Check it out on Goodreads or Amazon for detailed reviews. Would you like more books like this? 😊`);
+        addBotMessage(`Here's what I know about **${bookTitle}** - it's a fantastic read! 📚 Would you like links to check it out? 🔗`);
       }
+      return;
+    }
+    
+    // Check for interest/positive response
+    if (lowerInput.includes('like') || lowerInput.includes('love') || lowerInput.includes('interested') || 
+        lowerInput.includes('sounds good') || lowerInput.includes('want to read') || 
+        lowerInput.includes('sounds interesting')) {
       
-    } else if (openAIService.current.isBookInterest(userInput)) {
       const amazonUrl = `https://amazon.com/s?k=${encodeURIComponent(bookTitle)}`;
       const goodreadsUrl = `https://goodreads.com/search?q=${encodeURIComponent(bookTitle)}`;
       
-      addBotMessage(`Awesome choice, ${userProfile.name}! 🎉 **${bookTitle}** is a great pick!\n\nHere are some links:\n• [Amazon](${amazonUrl}) 🛒\n• [Goodreads](${goodreadsUrl}) 📖\n\nWould you like more recommendations similar to this one? 😊`);
-    } else {
-      addBotMessage(`📖 **${bookTitle}** is an excellent choice! Would you like me to tell you more about it, or are you looking for similar recommendations? 🤔`);
+      addBotMessage(`Awesome choice, ${userProfile.name}! 🎉 **${bookTitle}** is a great pick!\n\nHere are some links:\n• [Buy on Amazon](${amazonUrl}) 🛒\n• [View on Goodreads](${goodreadsUrl}) 📖\n\nWould you like more recommendations similar to this one? 😊`);
+      return;
     }
+    
+    // Default response for mentions of the book
+    addBotMessage(`📖 **${bookTitle}** is an excellent choice! Would you like me to:\n\n• Tell you more about this book 📝\n• Find links to purchase it 🔗\n• Get similar recommendations 📚\n\nJust let me know! 😊`);
   };
 
   const handleGeneralQuery = async (input) => {
+    const lowerInput = input.toLowerCase();
+    
+    // Check if user is asking for links to any of the recommended books
+    if (lowerInput.includes('link') || lowerInput.includes('buy') || lowerInput.includes('purchase') || 
+        lowerInput.includes('amazon') || lowerInput.includes('goodreads')) {
+      
+      if (recommendedBooks.length > 0) {
+        let linksMessage = `Here are links for all my recommendations, ${userProfile.name}! 🔗\n\n`;
+        
+        recommendedBooks.slice(0, 3).forEach((book, index) => {
+          const amazonUrl = `https://amazon.com/s?k=${encodeURIComponent(book)}`;
+          const goodreadsUrl = `https://goodreads.com/search?q=${encodeURIComponent(book)}`;
+          linksMessage += `**${book}**:\n• [Amazon](${amazonUrl}) 🛒\n• [Goodreads](${goodreadsUrl}) 📖\n\n`;
+        });
+        
+        linksMessage += `Which one interests you most? 😊`;
+        addBotMessage(linksMessage);
+        return;
+      } else {
+        addBotMessage(`I'd be happy to help you find links! 🔗 Could you tell me which book you're interested in? Or would you like me to give you some recommendations first? 📚`);
+        return;
+      }
+    }
+    
+    // Check for requests for new/different recommendations
+    if (lowerInput.includes('more recommendations') || lowerInput.includes('different books') || 
+        lowerInput.includes('other suggestions') || lowerInput.includes('new recommendations')) {
+      await getAIRecommendations(userProfile);
+      return;
+    }
+    
+    // For other general questions, use AI
     setIsTyping(true);
     
     try {
@@ -283,47 +393,124 @@ const BookRecommendationBot = () => {
     <div className="flex flex-col h-screen max-w-2xl mx-auto bg-gradient-to-br from-purple-50 to-blue-50">
       {/* Header */}
       <div className="bg-white border-b border-gray-200 p-4 shadow-sm">
-        <div className="flex items-center space-x-3">
-          <div className="bg-gradient-to-r from-purple-500 to-blue-500 p-2 rounded-full">
-            <Book className="w-6 h-6 text-white" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-3">
+            <div className="bg-gradient-to-r from-purple-500 to-blue-500 p-2 rounded-full">
+              <Book className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-xl font-semibold text-gray-800">BookBot AI</h1>
+              <p className="text-sm text-gray-500">
+                {setupComplete ? `Chatting with ${userProfile.name}` : 'Getting to know you...'}
+              </p>
+            </div>
           </div>
-          <div>
-            <h1 className="text-xl font-semibold text-gray-800">BookBot AI</h1>
-            <p className="text-sm text-gray-500">
-              {setupComplete ? `Chatting with ${userProfile.name}` : 'Getting to know you...'}
-            </p>
-          </div>
+          
+          {setupComplete && (
+            <button
+              onClick={() => setDebugMode(!debugMode)}
+              className={`px-3 py-1 text-xs rounded-full transition-colors ${
+                debugMode 
+                  ? 'bg-red-100 text-red-700' 
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              {debugMode ? 'Debug ON' : 'Debug'}
+            </button>
+          )}
         </div>
       </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((message, index) => (
-          <div key={index} className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-xs lg:max-w-md px-4 py-3 rounded-2xl ${
-              message.sender === 'user'
-                ? 'bg-gradient-to-r from-purple-500 to-blue-500 text-white'
-                : 'bg-white text-gray-800 shadow-md border border-gray-100'
-            }`}>
-              {message.sender === 'bot' && (
-                <div className="flex items-center space-x-2 mb-2">
-                  <Sparkles className="w-4 h-4 text-purple-500" />
-                  <span className="text-xs font-medium text-purple-600">BookBot AI</span>
-                </div>
-              )}
-              <div className="whitespace-pre-line">
-                {message.text.split('\n').map((line, i) => (
-                  <div key={i}>
-                    {typeof formatMessageWithLinks(line) === 'object' ? 
-                      formatMessageWithLinks(line) : line}
+          <div key={index}>
+            <div className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div className={`max-w-xs lg:max-w-md px-4 py-3 rounded-2xl ${
+                message.sender === 'user'
+                  ? 'bg-gradient-to-r from-purple-500 to-blue-500 text-white'
+                  : 'bg-white text-gray-800 shadow-md border border-gray-100'
+              }`}>
+                {message.sender === 'bot' && (
+                  <div className="flex items-center space-x-2 mb-2">
+                    <Sparkles className="w-4 h-4 text-purple-500" />
+                    <span className="text-xs font-medium text-purple-600">BookBot AI</span>
                   </div>
-                ))}
+                )}
+                <div className="whitespace-pre-line">
+                  {message.text.split('\n').map((line, i) => (
+                    <div key={i}>
+                      {typeof formatMessageWithLinks(line) === 'object' ? 
+                        formatMessageWithLinks(line) : line}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            
+            {/* Quick Action Buttons */}
+            {message.type === 'quick-actions' && setupComplete && (
+              <div className="flex justify-start mt-2">
+                <div className="bg-white p-3 rounded-2xl shadow-md border border-gray-100">
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => setInput("I want links for all books")}
+                      className="px-3 py-1 text-sm bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition-colors"
+                    >
+                      Get Links 🔗
+                    </button>
+                    <button
+                      onClick={() => setInput("Tell me more about the first book")}
+                      className="px-3 py-1 text-sm bg-green-100 text-green-700 rounded-lg hover:bg-green-200 transition-colors"
+                    >
+                      Learn More 📚
+                    </button>
+                    <button
+                      onClick={() => setInput("Give me different recommendations")}
+                      className="px-3 py-1 text-sm bg-purple-100 text-purple-700 rounded-lg hover:bg-purple-200 transition-colors"
+                    >
+                      Different Books 🔄
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {/* Help Text */}
+            {message.type === 'help-text' && (
+              <div className="flex justify-start mt-2">
+                <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-4 rounded-2xl border border-blue-200 max-w-md">
+                  <div className="text-sm text-gray-700">
+                    <div className="font-medium text-purple-700 mb-2">💡 You can ask me to:</div>
+                    <div className="space-y-1 text-xs">
+                      • "Get links for [book name]"
+                      • "Tell me more about [book]"
+                      • "I like [book name]"
+                      • "Give me different recommendations"
+                      • "Books similar to [book name]"
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+        {setupComplete && messages.length > 0 && !messages.some(m => m.type === 'help-text') && (
+          <div className="flex justify-start">
+            <div className="bg-gradient-to-r from-blue-50 to-purple-50 p-4 rounded-2xl border border-blue-200 max-w-md">
+              <div className="text-sm text-gray-700">
+                <div className="font-medium text-purple-700 mb-2">💡 You can ask me to:</div>
+                <div className="space-y-1 text-xs">
+                  • "Get links for [book name]"
+                  • "Tell me more about [book]"
+                  • "I like [book name]"
+                  • "Give me different recommendations"
+                  • "Books similar to [book name]"
+                </div>
               </div>
             </div>
           </div>
-        ))}
-        
-        {/* Genre selection for step 2 */}
+        )}
         {currentStep === 1 && questions[currentStep].type === 'multiple' && !setupComplete && (
           <div className="flex justify-start">
             <div className="bg-white p-4 rounded-2xl shadow-md border border-gray-100 max-w-md">
@@ -404,5 +591,4 @@ const BookRecommendationBot = () => {
 };
 
 export default BookRecommendationBot;
-
 
