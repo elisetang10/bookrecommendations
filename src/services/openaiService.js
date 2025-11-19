@@ -1,3 +1,4 @@
+// src/services/openaiService.js
 import OpenAI from 'openai';
 
 class OpenAIService {
